@@ -1,0 +1,35 @@
+baseURL: https://saunter.org
+languageCode: en-us
+title: saunter.org
+theme: hermit
+pygmentsCodefences: true
+pygmentsUseClasses: true
+enableEmoji: true
+googleAnalytics: UA-39548762-1
+
+author:
+    name: Thomas Rampelberg
+
+params:
+    dateform: Jan 2, 2006
+    dateformShort: Jan 2
+    dateformNum: 2006-01-02
+    dateformNumTime: 2006-01-02 15:04 -0700
+    themeColor: #494f5c
+    homeSubtitle: ""
+    footerCopyright: ""
+    justifyContent: false
+    relatedPosts: false
+    code_copy_button: true
+
+    social:
+        - name: twitter
+          url: https://twitter.com/grampelberg
+        - name: github
+          url: https://github.com/grampelberg
+
+menu:
+    main:
+        - name: posts
+          url: posts/
+          weight: 10
