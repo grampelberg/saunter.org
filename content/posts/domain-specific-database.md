@@ -17,6 +17,8 @@ By flipping the story around, there are two major implications - end users are n
 
 # YAML is for machines, not users
 
+NOTE: https://www.infra.app/ is an example of something for users
+
 
 # Everything is an implementation detail
 
