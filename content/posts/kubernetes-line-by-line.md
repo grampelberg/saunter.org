@@ -218,9 +218,10 @@ topologyKey: kubernetes.io/hostname
 
 `topologyKey` tells Kubernetes to look for unique node hostnames. There is quite
 a list of options here, such as `kubernetes.io/os` for workloads running in
-clusters running windows as well as linux. The [full list][topologykey] can give
-you some ideas of ways to distribute pods across zones, architectures or
-arbitrary keys.
+clusters running windows as well as linux. You could also use
+`failure-domain.beta.kubernetes.io/zone` to optimistically schedule pods across
+zones. The [full list][topologykey] can give you some ideas of ways to
+distribute pods across zones, architectures or arbitrary keys.
 
 ```yaml
 labelSelector:
@@ -231,11 +232,11 @@ labelSelector:
         - frontend
 ```
 
-By matching the name we're running, the weight of 100 will be applied to
-scheduling decisions if a pod is already running on a node. This is flexible and
-you could make it select across a whole application (`guestbook`) either
-co-scheduling resources that work in concert or keeping hungry pods separate for
-performance reasons.
+By matching the `app.kubernetes.io/name` label, the specified weight of 100 will
+be applied to scheduling decisions if a pod is already running on a node. This
+is flexible and you could make it select across a whole application
+(`guestbook`) either co-scheduling resources that work in concert or keeping
+hungry pods separate for performance reasons.
 
 Note: if you're running 1.18, there is a new field
 [`topologySpreadConstraints`][spread-constraints] that provides more
@@ -271,7 +272,7 @@ need to include it in the spec unless you'd like to make it explicit.
 ```yaml
 spec:
   strategy:
-    type: RollingUpdatea;sldfk
+    type: RollingUpdate
     rollingUpdate:
       maxSurge: 25%
       maxUnavailable: 25%
@@ -306,12 +307,18 @@ metadata, used by the deployment itself. The other is the metadata associated
 with a template, used to create the pod. The pod's metadata has slightly
 different requirements:
 
-- Don't add `name` or `namespace`. These will be inherited from the parent.
+- Don't add `name` or `namespace`. These will be inherited from the parent. Any
+  value you add here will be accepted but not actually do anything. A pod's name
+  is based off the deployment's name (`frontend`), the hash of the pod's
+  template and and a random string for the pod specifically. If you take a look
+  at the created pod, you'll see that the name is being set by `generateName`
+  which is a metadata field that anyone can use!
 - Match the selector as closely as possible. There should be as much overlap
   between the selector and the pod's labels as possible.
-- Don't use label values that can change. Add these to annotations instead. You
-  can't change the selector after creation, so having values between metadata
-  and the selector that change will cause update issues.
+- Don't use label values that can change. Add these to annotations or don't add
+  the pod labels with these values to the selector. You can't change the
+  selector after creation, so having values between metadata and the selector
+  that change will cause update issues.
 
 ## RBAC
 
@@ -321,9 +328,9 @@ These do not restrict access to the pod itself, there are other resources such
 as `NetworkPolicy` to do that. Even if a pod does not need to utilize the API at
 all, it is a best practice to specify a unique service account for each
 deployment. This guarantees that if there is a misconfigured `RoleBinding`, a
-pod does not have access it should not to the API's data. The default is to use
-the `default` service account in the namespace that they pod is running in. Make
-sure you don't modify the default `RoleBinding`!
+pod does not have accidental access to the API's data. When unspecified (as in
+this example), the `default` service account is used from the namespace the pod
+is running in. Make sure you don't modify the default `RoleBinding`!
 
 We can specify the service account by adding:
 
@@ -367,15 +374,145 @@ spec:
       enableServiceLinks: false
 ```
 
-## Priority
-
-TODO
-
 ## Security Context
 
-TODO
+A pod's security context configures what it can and cannot do. This can set
+defaults for the containers in the pod and can be overridden by the individual
+containers. [`PodSecurityPolicy`][psp] can be used to restrict what users
+configure for individual pods. Allowing pods to run as root is a [bad
+idea][just-say-no]. While you can (and should) set defaults for this as
+`PodSecurityPolicy`, we can set some defaults for the pod in this example.
 
-##
+```yaml
+spec:
+  template:
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 99
+        runAsGroup: 99
+```
+
+With `runAsNonRoot` set, containers will fail to start if they're using the
+default (`root` for docker containers). As it is pretty rare for containers to
+specify a user and group to run as `runAsUser` and `runAsGroup` use the standard
+99 for [nobody][nobody] to keep access to a minimum inside each container.
+Remember, these can be overridden on a per-container basis! If you have a
+container that must run as root or already specifies the user/group to run as,
+you can manage it at that level.
+
+## Advanced Concepts
+
+So far, the focus has been primarily on best practices. There's a lot of really
+interesting configuration that you can provide to a pod though! To keep
+optimizing your pods, check out:
+
+- `affinity` can be used for quite a bit more than simply spreading pods out
+  across nodes. It is definitely worth [reading up][affinity] to get an idea of
+  everything that is possible.
+- `ephemeralContainers` can be added after a pod has started! If you've wondered
+  how you can debug running containers that don't have any debugging tools,
+  [ephemeral containers][ephemeral] are what you've been looking for! You can
+  package up a debugging container with all your favorite tools and runtimes.
+  Modify the pod you're interested in and voila, instant debugging environment.
+- `priorityClassName` works hand in hand with cluster autoscaling. The priority
+  provides hints to the scheduler so that it can start important pods first or
+  preempt less important workloads. This is _not_ guaranteed and should not be
+  used to order dependencies for an application. Instead, check out the [waiting
+  pattern][waiting-pattern] to make sure applications start in the correct
+  order.
+- `shareProcessNamespace` allows every container in a pod to see what processes
+  are running in the other containers. This is fantastic for debugging and you
+  are even able to see the filesystem in all other containers because it is
+  mounted as part of `/proc`. There are some obvious security issues with this,
+  so it is more of a tool to use when required than something to use as a best
+  practice. The [documentation][shared-process] has more details.
+- [`tolerations`][taints] allow a pod to run on nodes it would not be able to
+  run on otherwise. Taints added to nodes combine with tolerations on pods to
+  tell the scheduler where it can put a specific pod. While using taints and
+  tolerations could be used to create [pets][pets-vs-cattle] instead of cattle
+  in a cluster, they come in handy!
+
+## Command and Arguments
+
+The interaction between `command`, `args` and Docker's
+[`ENTRYPOINT`][entrypoint] can be pretty confusing. Keep a couple things in mind
+and you'll be just fine! First off, `ENTRYPOINT` is the same as `command` in
+Kubernetes. If you want to override `ENTRYPOINT`, use `command`.
+
+`command` and `args` do not run in a shell by default. This improves security
+but comes with a couple downsides. Shells [split words][word-splitting] by
+default, taking a command like `ls -la` and converting it into `["ls", "-la"]`
+when a process is executed. Instead, it is up to you to pass the arguments in
+correctly. Don't fret, there's a simple one-liner that can show you what to add
+in, just run:
+
+```bash
+echo "my-command --args foobar" | \
+  awk '{for(i=1;i<=NF;i++){printf "\"%s\", ", $i}; printf "\n"}'
+```
+
+Additionally, there is nothing to expand environment variables. If you're
+running a command like `echo $FOOBAR`, your process will receive the string
+`$FOOBAR` instead of whatever that variable expands to. Ideally, you'd have your
+process read the environment variable directly. Sometimes that isn't possible,
+but you can set `command` and `args` to actually run a shell so that none of
+this is nearly as important.
+
+```yaml
+spec:
+  template:
+    spec:
+      containers:
+        - name: php-redis
+          command:
+            - /bin/sh
+            - -c
+          args: |
+            echo 'do whatever you want!' && my-process
+```
+
+`command` runs the `sh` shell and says that anything in `args` is a string that
+should be interpreted as a script. With multiline YAML, args can look exactly
+like the script you'd normally run.
+
+## Container Security Context
+
+In addition to `securityContext` at the pod level, it is possible to configure
+this at the container level. In fact, there are a couple important pieces of
+configuration at this level. As with `securityContext` at the pod level, it is a
+best practice to define [`PodSecurityPolicy`][psp] and use those for defaults
+instead of specifying it for every container and pod.
+
+```yaml
+spec:
+  template:
+    spec:
+      containers:
+        - name: php-redis
+          securityContext:
+            capabilities:
+              drop:
+                - all
+            privileged: false
+```
+
+When `privileged` is `true`, a container gets full access to all the devices on
+a host. A container with this kind of access could modify system configuration
+or manipulate other processes running on the node, even the kubelet itself! If a
+container needs to run as `privileged`, it should be treated very specially.
+
+Linux has a list of [capabilities][capabilities] that a process can get. These
+range from `CAP_SYS_ADMIN` allowing a container to mount and unmount volumes on
+the host to `CAP_NET_ADMIN` allowing a container to interact with the host's
+network in any way it wants. None of these are required for most workloads and
+should be dropped by default. For those that do need added capabilities, it is
+still valuable to drop everything first. That way, the containers run with only
+what they absolutely require.
+
+## Advanced Concepts
+
+- `ConfigMap` updates
 
 ## Raw
 
@@ -406,11 +543,6 @@ spec:
           env:
             - name: GET_HOSTS_FROM
               value: dns
-              # If your cluster config does not include a dns service, then to
-              # instead access environment variables to find service host
-              # info, comment out the 'value: dns' line above, and uncomment the
-              # line below:
-              # value: env
           ports:
             - containerPort: 80
 ```
@@ -436,3 +568,21 @@ spec:
   https://kubernetes.io/docs/concepts/workloads/pods/pod-topology-spread-constraints/
 [cluster-spread]:
   https://kubernetes.io/docs/concepts/workloads/pods/pod-topology-spread-constraints/#cluster-level-default-constraints
+[psp]: https://kubernetes.io/docs/concepts/policy/pod-security-policy/
+[just-say-no]: https://opensource.com/article/18/3/just-say-no-root-containers
+[nobody]: https://en.wikipedia.org/wiki/Nobody_(username)
+[affinity]:
+  https://kubernetes.io/docs/concepts/scheduling-eviction/assign-pod-node/#affinity-and-anti-affinity
+[ephemeral]:
+  https://kubernetes.io/docs/concepts/workloads/pods/ephemeral-containers/
+[waiting-pattern]: TODO
+[shared-namespace]:
+  https://kubernetes.io/docs/tasks/configure-pod-container/share-process-namespace/
+[taints]:
+  https://kubernetes.io/docs/concepts/scheduling-eviction/taint-and-toleration/
+[pets-vs-cattle]:
+  https://thenewstack.io/how-to-treat-your-kubernetes-clusters-like-cattle-not-pets/
+[capabilities]: http://man7.org/linux/man-pages/man7/capabilities.7.html
+[entrypoint]: https://docs.docker.com/engine/reference/builder/#entrypoint
+[word-splitting]:
+  https://www.gnu.org/software/bash/manual/html_node/Word-Splitting.html
