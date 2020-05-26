@@ -510,6 +510,37 @@ should be dropped by default. For those that do need added capabilities, it is
 still valuable to drop everything first. That way, the containers run with only
 what they absolutely require.
 
+## Images
+
+Let's get something out of the way before diving into the example - friends
+don't let friends use `:latest`. It is tempting, but breaks quite a few
+assumptions that Kubernetes makes:
+
+- Kubernetes does not watch your image repository. Pushing new versions to a tag
+  like `latest` will not cause updates to occur. While there is tooling in the
+  ecosystem to help out here, it is definitely an anti-pattern. Isn't it nice to
+  have everything explicit anyways?
+- As covered in the [updates](#updates) section, applying a YAML that doesn't
+  change also won't update anything. It is possible to add an annotation that
+  changes, but now you're changing something! Might as well be explicit about
+  what image you're running.
+- By default, images are only pulled if they do not already exist on the node.
+  This works great as it ends up caching your image on the nodes that it runs
+  on. Any subsequent starts of the container will go faster and use less
+  bandwidth. You can have the image pulled every time a container starts, but
+  now you're slowing the pod's launch down, using up extra bandwidth, adding
+  load to the image registry that isn't strictly required and introducing a
+  single point of failure in your infrastructure.
+
+TODO: suggest tooling to update the image tag
+
+```yaml
+image: gcr.io/google-samples/gb-frontend:v4
+```
+
+This is a pretty decent image. There's a version (`v4`) and the image is fully
+qualified. It could be improved
+
 ## Advanced Concepts
 
 - `ConfigMap` updates
