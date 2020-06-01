@@ -532,18 +532,211 @@ assumptions that Kubernetes makes:
   load to the image registry that isn't strictly required and introducing a
   single point of failure in your infrastructure.
 
-TODO: suggest tooling to update the image tag
+It is a pain to modify image tags that might be spread between multiple files
+every time you want to do an update. Luckily, there's a lot of great tooling
+that has been created in the ecosystem to help out! Kustomize comes with
+[transformers][kustomize-image] that allow you to specify the tag for any
+container in a project. You can also use [helm][helm] or [jkcfg][jkcfg]. It
+might seem like extra effort to start using these tools, but it will pay you
+back in the future. Eventually, you're going to want to be able to configure
+your application to run in different environments such as dev, staging or prod.
+These tools help out with more than just image tags, they can configure
+replicas, secrets and resources so that your applications are setup correctly to
+run in each environment.
 
 ```yaml
 image: gcr.io/google-samples/gb-frontend:v4
 ```
 
 This is a pretty decent image. There's a version (`v4`) and the image is fully
-qualified. It could be improved
+qualified. By adding the commit SHA that this image was built from to the tag,
+you will always be able to understand exactly what version of something is
+running and then debug from there. It would be possible to use [semver][semver]
+to solve the same problem. Simply increment the minor version every time a build
+happens. You would then add a tag in git for every minor version bump. As this
+tends to just create a ton of tags and get in the way of the information you're
+actually looking for, the commit itself, it isn't usually valuable to use full
+semver.
+
+## Resources
+
+```yaml
+resources:
+  requests:
+    cpu: 100m
+    memory: 100Mi
+```
+
+There are two configurations possible for resources - requests and limits. You
+can think of requests as guaranteeing _at least_ a certian amount of resources
+are available for your container. Limits define _at most_ the resources that
+your container can consume.
+
+As requests are related to the minimum amount of guaranteed resources, they are
+used by the scheduler to fit your workload into existing nodes. In this
+instance, 10% of a CPU has been requested. The `100m` value here refers to
+millis and 1000m make up a single CPU. Check out the [resource
+documentation][cpu-millis] for more units, there's a bunch of them for memory!
+
+When scheduling, this container will only be run on a node that has at least 10%
+of a CPU available. It is pretty important to remember that resource requests
+are static and not related to usage. They're checked at scheduling and increase
+or decrease the amount of resources available on a node when the container is
+originally started. If your container doesn't use the full request, that won't
+change anything.
+
+Linux provides a little bit more to guarantee that your container has at least
+the resources that you requested. This is done by setting [cpu
+shares][cpu-shares]. While it is entirely possible for your container to consume
+more than its request, the kernel will guarantee that the CPU is there when it
+is needed. If you're not using your full request, any container on the node can
+optimistically use the CPU request until it is required by the original
+container again.
+
+It is critical that every container definition have resource requests. Without
+requests the scheduler will continue to add pods to one node, effectively
+over-provisioning it. If anything on that node was to start consuming more CPU
+than it should, this noisy neighbor could take everything else on the node down.
+
+If that isn't scary enough for you, here's another good reason - autoscaling.
+[Cluster autoscaler][cluster-autoscaler] watches for pods that are unschedulable
+for resource reasons. When a pod is outstanding and cannot fit on the cluter,
+the autoscaler will create a new node. Your cluster will then automatically be
+able to grow or shrink based on what resource requests you've configured and how
+much has been scheduled on the cluster. Remember, resource requests are static
+and not related to usage, if you'd like to do autoscaling based off current
+utilization check out the [horizontal pod autoscaler][hpa].
+
+Limits are the opposite of requests. Instead of guaranteeing a minimum amount of
+resources, they define the maximum amount that a pod can use. Setting a limit
+for CPU will guarantee that a pod cannot consume any more than that on a node.
+Alternatively, setting a limit for memory will cause your container to be OOM
+killed. As it is pretty valuable to let CPU burst when the node has some
+available, setting the CPU limit on a container should only happen when you've
+got a specific requirement for it.
+
+Memory limits are quite a bit more important. When nodes run out of memory, they
+crash. Imagine having a container with a slow memory leak being able to take
+everything down on a node. That doesn't sound like a fun incident to explain.
+The value can be set pretty high and provides a little bit of insurance in case
+there is a runaway memory issue.
+
+```yaml
+resources:
+  requests:
+    cpu: 100m
+    memory: 100Mi
+  limits:
+    memory: 1Gi
+```
+
+With requests and limits configured this way, containers will have a minimum
+amount of resources they can consume, noisy neighbors will have less opportunity
+to slow sibling workloads down and runaway processes won't be able to crash the
+node.
+
+Don't worry if you don't have any idea where to set these right now. It is easy
+to pick somewhat arbitrary numbers, monitor over time and iterate on the values.
+After letting a workload run for awhile, take a look at the resource consumption
+and make a more informed decision. Having something for requests and limits that
+is too large or small is far better than not having anything at all.
+
+## Ports
+
+```yaml
+ports:
+  - containerPort: 80
+```
+
+Did you know that the ports section doesn't actually really do anything? Each
+pod gets its own [network namespace][network-namespace]. The containers inside
+this pod are responsible to open the ports that they listen on as well as keep
+from stepping on the toes of other containers. Container port definitions are
+primarily documentation for what your container is up to.
+
+Even though the system doesn't actually do anything with container ports, the
+documentation is indispensible! All you need to do is look at a pod definition
+and immediately have an idea about what's going on. In fact, there should be a
+name as well.
+
+```yaml
+ports:
+  - containerPort: 8080
+    name: http
+```
+
+Note, the container port was updated from 80 to 8080 as well. This is so that
+the container does not need to run as root. If you want the container to be
+accessible on port 80, simply define it that way in the `Service` and map from
+80 to 8080.
+
+## Probes
+
+This YAML is completely missing `readinessProbe`. That's a critical mistake! The
+`readinessProbe` is used to inform Kubernetes as to whether a container can
+receive traffic or not. These are run constantly and not just at startup and
+provide you with the tools to manage a couple important scenarios related to
+lost requests and capacity.
+
+First, it is important to understand how the pieces fit together. To reach a
+pod, you must define a service. By default, services create a virtual IP address
+in your cluster. When a node sees traffic destined to this virtual IP address,
+it uses [iptables][iptables] redirect rules to convert the virtual IP address
+into a randomly selected pod IP address. These pod IP addresses are represented
+in Kubernetes as `Endpoint` resources. An `Endpoint` has an IP address added to
+it when a pod passes its readinessProbe. Effectively, this means that a pod
+cannot receive traffic until it passes its readinessProbe. Any time a
+readinessProbe fails, the IP address will be removed from the endpoint and the
+pod will no longer receive traffic.
+
+If a `readinessProbe` is left off, the IP address for a pod is immediately added
+to the endpoint. At this point, it becomes a race to see whether your containers
+have started up or traffic falls on dead ears. For particularly fast servers, it
+is possible that the process will have started up in time. Everything else will
+cause a couple issues ranging from connection errors to the dreaded 503 error
+from ingress controllers. Most processes take a little time to start up and
+therefore setting a readinessProbe can eliminate what seems like flaky behavior
+in a cluster.
+
+Readiness is a tool that can be used all the time instead of just at startup.
+Imagine an application that has a max queue size. If the readinessProbe would
+fail when the max queue size is reached, that pod will have its IP address
+removed from the endpoint. Traffic will cease to be distributed to the pod with
+a failed readinessProbe allowing the pod to work through its backlog. When the
+queue has shrunk in size, the readinessProbe will pass again and traffic will
+flow again. As readinessProbes are not used to signal restarting processes, this
+is completely safe to do! If you'd like to actually restart the container,
+`livenessProbe` is the right tool for the job.
+
+Note that because endpoint IP addresses need to be added on every node, and
+iptables is extremely slow. Depending on the number of updates happening on your
+cluster there are no guarantees as to how immediately an endpoint is added or
+removed. There have been some reports on busy clusters of it taking over a
+minute to distribute changes to endpoints. This is one of the reasons why the
+`preStop` and `terminationGracePeriodSeconds` settings may need to be configured
+on your cluster to ensure no requests are lost.
+
+```yaml
+readinessProbe:
+  httpGet:
+    path: /
+    port: 8080
+```
+
+In this example, there's basically no reason to leave a readinessProbe off.
+There's already an HTTP server listening and there's no special requirements for
+readiness! All it needs is a 200 response.
+
+The `livenessProbe` has been left off here on purpose. Liveness is related to
+restarting the process and comes into play when there's an opportunity for a
+process to get locked up. For some applications this is a big risk and the
+livenessProbe should be configured. Most applications, however, tend to not have
+explicit deadlock issues and you don't get much from defining liveness.
 
 ## Advanced Concepts
 
 - `ConfigMap` updates
+- `preStop` to manage graceful shutdown
 
 ## Raw
 
@@ -617,3 +810,19 @@ spec:
 [entrypoint]: https://docs.docker.com/engine/reference/builder/#entrypoint
 [word-splitting]:
   https://www.gnu.org/software/bash/manual/html_node/Word-Splitting.html
+[kustomize-image]:
+  https://github.com/kubernetes-sigs/kustomize/blob/master/docs/fields.md#transformers
+[jkcfg]: https://github.com/jkcfg/jk
+[helm]: https://helm.sh
+[semver]: https://semver.org/
+[cpu-millis]:
+  https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/#resource-units-in-kubernetes
+[cpu-shares]:
+  https://access.redhat.com/documentation/en-us/red_hat_enterprise_linux/6/html/resource_management_guide/sec-cpu
+[cluster-autoscaler]:
+  https://github.com/kubernetes/autoscaler/tree/master/cluster-autoscaler
+[hpa]:
+  https://kubernetes.io/docs/tasks/run-application/horizontal-pod-autoscale/
+[network-namespace]:
+  https://kubernetes.io/docs/concepts/cluster-administration/networking/#the-kubernetes-network-model
+[iptables]: TODO
