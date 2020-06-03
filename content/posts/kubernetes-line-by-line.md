@@ -500,6 +500,12 @@ echo "my-command --args foobar" | \
   awk '{for(i=1;i<=NF;i++){printf "\"%s\", ", $i}; printf "\n"}'
 ```
 
+```sh
+#! /bin/sh
+# as expand-args.sh                         
+echo $@ | awk '{for(i=1;i<=NF;i++){printf "\"%s\", ", $i}; printf "\n"}'
+```
+
 Additionally, there is nothing to expand environment variables. If you're
 running a command like `echo $FOOBAR`, your process will receive the string
 `$FOOBAR` instead of whatever that variable expands to. Ideally, you'd have your
@@ -662,6 +668,8 @@ Alternatively, setting a limit for memory will cause your container to be OOM
 killed. As it is pretty valuable to let CPU burst when the node has some
 available, setting the CPU limit on a container should only happen when you've
 got a specific requirement for it.
+
+_Somewhere here talk about how cpu is compressable, but memory is not? Always seemed key to me. -JW_
 
 Memory limits are quite a bit more important. When nodes run out of memory, they
 crash. Imagine having a container with a slow memory leak being able to take
