@@ -4,7 +4,31 @@ draft: true
 date: 2020-05-24
 ---
 
-## Metadata
+## Key definitions
+
+* Manifest: 
+* CRD:
+* `Controller`: A process which watches and manages Kubernetes resources, either built-in or CRDs.
+* `Operator`: CRD + Controller = Operator
+* K8s API: // _(as opposed to any api the end user writes, confusing in article, JW)_
+* Downward API: A way to expose metadata in a resource to that resource itself, usually as a volume.
+
+## The Shape of a Kubernetes Manifest
+
+In this walkthrough, we're going to use a `Deployment` for the example and talk
+about best practices.  Before we dive into details, let's get a feel for the
+overall shape of the manifest.
+
+All Kubernetes manifests must have a `type` (here a `Deployment`) and an `apiVersion`,
+which depends on what version of Kubernetes you are running, and possibly on what 
+`CustomResourceDefinition`s have been added to your cluster.  The remainder of the
+mainfest will be grouped into three top level sections:
+
+* metadata: Information about this resource. `name`, `labels`, and `annotations` are the main keys you'll see here.
+* spec: How to configure, run, manage, and dispose of this resource.
+* status: The current status of this resource, as well as historical info about how it got to this point.
+
+# Metadata
 
 ```yaml
 metadata:
@@ -15,6 +39,8 @@ All resources have a metadata section that includes labels and annotations.
 Labels are supposed to be mostly static and used for filtering queries and
 results. You'll see `selector` on many resources, that's what the controllers
 use to figure out what resource they should be targeting.
+
+_It took me a while to get the hang of selectors, if I ever truely did.  It might be worth a little more exposition on this bit. -JW_
 
 Labels are simply key/value pairs. While it is tempting to use something
 arbitrary, much of the ecosystem has standardized on a common naming scheme that
@@ -27,6 +53,8 @@ my.domain.com/name: "foobar"
 In addition to the naming scheme, it is recommended to have a couple labels on
 every resource. Take a look at the [common labels][labels] documentation for
 more information there.
+
+_Bonus points here, everyone always wants to define their own labels. -JW_
 
 ```yaml
 app.kubernetes.io/name: frontend
@@ -43,6 +71,8 @@ it! These all allow you to query the API. Instead of
 `kubectl get deployment -l app.kubernetes.io/name=frontend`. Each label is
 especially useful when using a templating system such as [helm][helm] or
 [kustomize][kustomize]. Templated with helm, these labels would look like:
+
+_The above example doesn't really show why you'd use one over the other, it just looks like more typing.  Maybe use it to get multiple resources, in a way that's not easy with kubectl get deployment frontend? -JW_
 
 ```yaml
 app.kubernetes.io/name: "{{ .Chart.Name }}"
@@ -102,7 +132,10 @@ metadata:
 ```
 
 Remember, this is just a blob of text! You can put anything in there such as
-JSON, YAML or as in this example, markdown itself.
+JSON, YAML or as in this example, markdown itself.  Do be aware that there is a 1MB
+limit on a single manifest; you can fit a lot of information here, but not unlimited.
+A good rule of thumb is that you can have 10s of pages in your manifest with comfort;
+when you pass 100 pages, it's time to start adjusting your thinking. _Just a rough guide, feel free to adjust. -JW_
 
 A completely populated `metadata` section for this app would end up looking
 something like this:
@@ -132,6 +165,19 @@ metadata:
 
       [Ghostbusters](https://en.wikipedia.org/wiki/Ghostbusters)
 ```
+
+### Reading metadata from inside the resource
+
+One other use of metadata, is you can provide it to your running application, 
+via the `Downward API`. This can be very useful for ensuring telemetry all uses
+the exact same info, or even to allow your app to change its behavior depending 
+on the annotations operations provide. Feature flags, anyone?
+
+_I really like the downward api, and if you think it fits here, I'll expand it with an example and more exposition, if not, let's remove it. -JW_
+
+# Spec
+
+Now we move on to the second major part of the manifest.  _expand? I thought the grouping would help for following along. -JW_
 
 ## Selector
 
@@ -181,8 +227,8 @@ This example does not specify placement. While that's likely fine for
 development or a demo environment, moving into production should have a little
 bit of extra configuration. The Kubernetes scheduler is a little naive. It will
 look for nodes that can fit a pod and prioritize nodes that have already pulled
-the required image. If you do not use [anit-affinity][anti-affinity], it is
-likely that your pods will bunch up on a single node. Adding an anti-affinity to
+the required image. To avoid having your pods bunch up on a single node, use 
+[anit-affinity][anti-affinity]. Adding an anti-affinity to
 the pod's `spec` will end up distributing your workloads across the cluster
 unless it doesn't fit otherwise. This will increase your resilience to node
 failures and theoretically improve uptime. To add this kind of distribution in,
@@ -347,6 +393,8 @@ use the correct credentials, no other configuration required! This is
 particularly useful when combined with an `initContainer` to wait for dependent
 resources to becomes healthy before starting.
 
+_It would be cool to know where this is placed. Also, knowing where the k8s api tls cert is placed and how to use it would be cool, but I'm not sure it belongs here. -JW_
+
 ## Service Links
 
 Replicating a feature that was originally part of Docker, Kubernetes adds
@@ -450,6 +498,12 @@ in, just run:
 ```bash
 echo "my-command --args foobar" | \
   awk '{for(i=1;i<=NF;i++){printf "\"%s\", ", $i}; printf "\n"}'
+```
+
+```sh
+#! /bin/sh
+# as expand-args.sh                         
+echo $@ | awk '{for(i=1;i<=NF;i++){printf "\"%s\", ", $i}; printf "\n"}'
 ```
 
 Additionally, there is nothing to expand environment variables. If you're
@@ -614,6 +668,8 @@ Alternatively, setting a limit for memory will cause your container to be OOM
 killed. As it is pretty valuable to let CPU burst when the node has some
 available, setting the CPU limit on a container should only happen when you've
 got a specific requirement for it.
+
+_Somewhere here talk about how cpu is compressable, but memory is not? Always seemed key to me. -JW_
 
 Memory limits are quite a bit more important. When nodes run out of memory, they
 crash. Imagine having a container with a slow memory leak being able to take
