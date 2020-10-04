@@ -8,28 +8,39 @@ enableEmoji: true
 googleAnalytics: UA-39548762-1
 
 author:
-    name: Thomas Rampelberg
+  name: Thomas Rampelberg
 
 params:
-    dateform: Jan 2, 2006
-    dateformShort: Jan 2
-    dateformNum: 2006-01-02
-    dateformNumTime: 2006-01-02 15:04 -0700
-    themeColor: #494f5c
-    homeSubtitle: ""
-    footerCopyright: ""
-    justifyContent: false
-    relatedPosts: false
-    code_copy_button: true
+  dateform: Jan 2, 2006
+  dateformShort: Jan 2
+  dateformNum: 2006-01-02
+  dateformNumTime: 2006-01-02 15:04 -0700
+  themeColor: #494f5c
+  homeSubtitle: ''
+  footerCopyright: ''
+  justifyContent: false
+  relatedPosts: false
+  code_copy_button: true
 
-    social:
-        - name: twitter
-          url: https://twitter.com/grampelberg
-        - name: github
-          url: https://github.com/grampelberg
+  social:
+    - name: twitter
+      url: https://twitter.com/grampelberg
+    - name: github
+      url: https://github.com/grampelberg
 
 menu:
-    main:
-        - name: posts
-          url: posts/
-          weight: 10
+  main:
+    - name: posts
+      url: posts/
+      weight: 10
+    - name: projects
+      url: projects/
+      weight: 20
+    - name: resume
+      url: resume/
+      weight: 30
+
+markup:
+  goldmark:
+    renderer:
+      unsafe: true

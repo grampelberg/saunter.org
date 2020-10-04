@@ -1,0 +1,14 @@
+{
+  "overrides": [
+    {
+      "files": ["*.html"],
+      "options": {
+        "parser": "go-template"
+      }
+    }
+  ],
+  "semi": false,
+  "singleQuote": true,
+  "printWidth": 80,
+  "proseWrap": "always"
+}
